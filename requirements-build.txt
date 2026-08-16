@@ -1,0 +1,3 @@
+docling-serve[ui]==1.30.0
+pyinstaller==6.16.0
+sentence-transformers>=5.0,<6
