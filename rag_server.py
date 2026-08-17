@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-import os
+import asyncio
+import hashlib
+import hmac
+import json
 import logging
+import os
+import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -12,8 +18,11 @@ from uuid import uuid4
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
+
+import task_store
 
 EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1200"))
@@ -48,10 +57,19 @@ def _load_embedder() -> None:
 logger = logging.getLogger("docling-rag")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+if getattr(sys, "frozen", False):
+    _base_dir = Path(sys.executable).resolve().parent
+else:
+    _base_dir = Path(__file__).resolve().parent
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_embedder()
+    db_path = _base_dir / "tasks.db"
+    task_store.init(db_path)
+    logger.info("Task store initialized: %s", db_path)
+    _start_webhook_worker()
     yield
 
 
@@ -233,3 +251,201 @@ async def import_vectors(body: ImportRequest) -> dict[str, Any]:
             for text, vector in zip(texts, vectors)
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Models for the /rag/embed/async endpoint
+# ---------------------------------------------------------------------------
+
+
+class AsyncEmbedRequest(BaseModel):
+    """Request body for /rag/embed/async with URL input."""
+
+    url: str
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Webhook helper
+# ---------------------------------------------------------------------------
+
+WEBHOOK_MAX_RETRIES = 3
+WEBHOOK_DELAYS = [5, 30, 60]
+
+
+def _sign_payload(payload_bytes: bytes, secret: str) -> str:
+    return hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+
+
+def _deliver_webhook(task: dict[str, Any]) -> bool:
+    webhook_url = task.get("webhook_url")
+    if not webhook_url:
+        return True
+
+    payload = {
+        "task_id": task["task_id"],
+        "status": task["status"],
+        "filename": task["filename"],
+    }
+    if task["status"] == "completed" and task.get("result"):
+        payload.update(json.loads(task["result"]))
+    elif task["status"] == "failed":
+        payload["error"] = task.get("error", "unknown")
+
+    payload_bytes = json.dumps(payload, ensure_ascii=False).encode()
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+
+    secret = task.get("webhook_secret")
+    if secret:
+        headers["X-Webhook-Secret"] = _sign_payload(payload_bytes, secret)
+
+    try:
+        resp = httpx.post(webhook_url, content=payload_bytes, headers=headers, timeout=30)
+        resp.raise_for_status()
+        logger.info("Webhook delivered for task %s -> %s", task["task_id"], webhook_url)
+        return True
+    except Exception:
+        logger.exception("Webhook delivery failed for task %s", task["task_id"])
+        return False
+
+
+def _webhook_worker() -> None:
+    while True:
+        try:
+            tasks = task_store.pending_webhook_tasks()
+            for task in tasks:
+                if _deliver_webhook(task):
+                    continue
+                count = task_store.increment_retry(task["task_id"])
+                if count >= WEBHOOK_MAX_RETRIES:
+                    logger.warning("Webhook retry limit reached for task %s", task["task_id"])
+        except Exception:
+            logger.exception("Webhook worker error")
+        time.sleep(5)
+
+
+def _start_webhook_worker() -> None:
+    t = threading.Thread(target=_webhook_worker, daemon=True)
+    t.start()
+    logger.info("Webhook worker started")
+
+
+# ---------------------------------------------------------------------------
+# Background processing
+# ---------------------------------------------------------------------------
+
+
+def _process_task(task_id: str, file_path: Path, filename: str) -> None:
+    try:
+        logger.info("[task %s] Converting document: %s", task_id, filename)
+        chunks = _chunks(_convert(file_path))
+        if not chunks:
+            task_store.fail_task(task_id, "No text was extracted")
+            logger.warning("[task %s] No text extracted from %s", task_id, filename)
+            return
+        logger.info("[task %s] Extracted %d chunks", task_id, len(chunks))
+        vectors = _vectors(chunks)
+        logger.info("[task %s] Created %d embeddings", task_id, len(vectors))
+        result = {
+            "filename": filename,
+            "model": EMBEDDING_MODEL,
+            "dimensions": len(vectors[0]),
+            "items": [
+                {"id": str(uuid4()), "text": chunk, "embedding": vector}
+                for chunk, vector in zip(chunks, vectors)
+            ],
+        }
+        task_store.complete_task(task_id, result)
+        logger.info("[task %s] Completed", task_id)
+    except Exception as exc:
+        task_store.fail_task(task_id, str(exc))
+        logger.exception("[task %s] Failed", task_id)
+    finally:
+        _cleanup_temp_file(file_path)
+
+
+def _process_task_from_url(task_id: str, url: str, filename: str) -> None:
+    try:
+        logger.info("[task %s] Downloading from URL: %s", task_id, url)
+        resp = httpx.get(url, timeout=120, follow_redirects=True)
+        resp.raise_for_status()
+        suffix = Path(url.split("?")[0]).suffix or Path(filename).suffix or ".pdf"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(resp.content)
+            path = Path(tmp.name)
+        if not filename or filename == "document":
+            filename = Path(url.split("?")[0]).name or f"download{suffix}"
+        _process_task(task_id, path, filename)
+    except Exception as exc:
+        task_store.fail_task(task_id, f"Download failed: {exc}")
+        logger.exception("[task %s] URL download failed: %s", task_id, url)
+
+
+# ---------------------------------------------------------------------------
+# Async endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/rag/embed/async")
+async def embed_async(
+    file: UploadFile | None = File(None),
+    url: str | None = Form(None),
+    webhook_url: str | None = Form(None),
+    webhook_secret: str | None = Form(None),
+) -> dict[str, Any]:
+    """Submit a document for async processing.
+
+    Accept either a file upload or a URL. The server returns a task_id
+    immediately and processes the document in the background. When finished,
+    the result is delivered to webhook_url (if provided).
+
+    The caller can also poll GET /rag/tasks/{task_id} to check status.
+    """
+    if file is None and url is None:
+        raise HTTPException(status_code=422, detail="Provide either 'file' or 'url'")
+
+    task_id = str(uuid4())
+    filename = file.filename if file else Path(url.split("?")[0]).name or "document"
+
+    task_store.create_task(
+        task_id=task_id,
+        filename=filename,
+        webhook_url=webhook_url,
+        webhook_secret=webhook_secret,
+    )
+    logger.info("Task created: %s (filename=%s)", task_id, filename)
+
+    if file is not None:
+        suffix = Path(filename).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temporary:
+            temporary.write(await file.read())
+            path = Path(temporary.name)
+        await file.close()
+        t = threading.Thread(target=_process_task, args=(task_id, path, filename), daemon=True)
+    else:
+        t = threading.Thread(target=_process_task_from_url, args=(task_id, url, filename), daemon=True)
+
+    t.start()
+    return {"task_id": task_id, "status": "processing"}
+
+
+@app.get("/rag/tasks/{task_id}")
+def get_task(task_id: str) -> dict[str, Any]:
+    """Query task status and result."""
+    task = task_store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    response: dict[str, Any] = {
+        "task_id": task["task_id"],
+        "status": task["status"],
+        "filename": task["filename"],
+        "created_at": task["created_at"],
+        "updated_at": task["updated_at"],
+    }
+    if task["status"] == "completed" and task.get("result"):
+        response["result"] = json.loads(task["result"])
+    elif task["status"] == "failed":
+        response["error"] = task.get("error")
+    return response

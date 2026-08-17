@@ -4,8 +4,10 @@
 
 ## 功能
 
-- `POST /rag/embed`：上傳文件，Docling 解析、切割 chunk、產生 embedding 向量，回傳 JSON
-- `POST /rag/import`：提交預先切割的文本，產生 embedding 向量，回傳 JSON
+- `POST /rag/embed`：上傳文件，同步解析、切割 chunk、產生 embedding 向量
+- `POST /rag/embed/async`：非同步處理，支援上傳文件或 URL，完成後 Webhook 回呼
+- `GET /rag/tasks/{task_id}`：查詢非同步任務狀態
+- `POST /rag/import`：提交預先切割的文本，同步產生 embedding 向量
 - `GET /health`：健康檢查
 - 支援 CPU / GPU 切換
 - 支援自訂模型、chunk 大小
@@ -97,18 +99,9 @@ usage: docling-serve.exe [options]
 | `HF_HOME` | `<exe_dir>/huggingface` | 模型下載位置 |
 | `DOCLING_SERVE_ARTIFACTS_PATH` | `<exe_dir>/docling_models` | Docling 模型快取位置 |
 
-Windows 環境變數範例：
-
-```powershell
-$env:RAG_DEVICE="cuda"
-$env:RAG_EMBEDDING_MODEL="BAAI/bge-m3"
-$env:HF_HOME="D:\docling-models"
-.\dist\docling-serve.exe
-```
-
 ## API 使用
 
-### 上傳文件並轉向量
+### 同步：上傳文件並轉向量
 
 ```powershell
 curl.exe -X POST "http://localhost:8000/rag/embed" `
@@ -132,6 +125,94 @@ curl.exe -X POST "http://localhost:8000/rag/embed" `
 }
 ```
 
+### 非同步：提交文件 + Webhook 回呼
+
+上傳文件：
+
+```powershell
+curl.exe -X POST "http://localhost:8000/rag/embed/async" `
+  -F "file=@C:\Docs\manual.pdf" `
+  -F "webhook_url=https://your-app.com/callback" `
+  -F "webhook_secret=optional-hmac-key"
+```
+
+透過 URL 下載：
+
+```powershell
+curl.exe -X POST "http://localhost:8000/rag/embed/async" `
+  -F "url=https://example.com/document.pdf" `
+  -F "webhook_url=https://your-app.com/callback"
+```
+
+立即回傳：
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing"
+}
+```
+
+### 查詢任務狀態
+
+```powershell
+curl.exe http://localhost:8000/rag/tasks/{task_id}
+```
+
+回傳：
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "filename": "manual.pdf",
+  "created_at": 1700000000.0,
+  "updated_at": 1700000005.0,
+  "result": {
+    "filename": "manual.pdf",
+    "model": "BAAI/bge-small-zh-v1.5",
+    "dimensions": 512,
+    "items": [
+      {"id": "uuid", "text": "chunk", "embedding": [0.01]}
+    ]
+  }
+}
+```
+
+### Webhook 回呼格式
+
+成功：
+
+```json
+{
+  "task_id": "xxx",
+  "status": "completed",
+  "filename": "manual.pdf",
+  "model": "BAAI/bge-small-zh-v1.5",
+  "dimensions": 512,
+  "items": [...]
+}
+```
+
+失敗：
+
+```json
+{
+  "task_id": "xxx",
+  "status": "failed",
+  "filename": "manual.pdf",
+  "error": "No text was extracted"
+}
+```
+
+HMAC 簽名（選用）：
+
+```text
+X-Webhook-Secret: sha256=xxx
+```
+
+Webhook 失敗會自動重試 3 次（間隔 5s、30s、60s），全部失敗後任務標記 `failed`，可透過查詢 API 取得結果。
+
 ### 提交預切割文本並轉向量
 
 ```powershell
@@ -150,8 +231,10 @@ curl.exe http://localhost:8000/health
 
 ```text
 外部應用程式
-  -> Docling RAG Service (本專案)
-  -> 回傳 chunks + vectors
+  -> POST /rag/embed/async (上傳文件或 URL)
+  <- 回傳 task_id
+  -> 等待 Webhook 回呼 或 查詢 GET /rag/tasks/{task_id}
+  -> 取得 chunks + vectors
   -> 外部應用程式寫入 PostgreSQL (pgvector)、Qdrant、Chroma 等向量資料庫
 ```
 
@@ -179,6 +262,16 @@ Torch version: 2.x.x, CUDA available: True
 Loading embedding model: BAAI/bge-small-zh-v1.5 (device=cuda)
 Embedding model loaded: BAAI/bge-small-zh-v1.5 on cuda
 ```
+
+## 任務持久化
+
+非同步任務狀態儲存在 SQLite：
+
+```text
+dist/tasks.db
+```
+
+服務重啟後任務仍可查詢。不需要額外安裝 Redis 或 RabbitMQ。
 
 ## GitHub Actions
 

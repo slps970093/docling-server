@@ -55,6 +55,7 @@ hiddenimports += collect_submodules("sklearn")
 hiddenimports += collect_submodules("rapidocr")
 hiddenimports += [
     "rag_server",
+    "task_store",
     "scipy._external.array_api_compat.numpy.fft",
 ]
 
