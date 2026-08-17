@@ -10,18 +10,39 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-
-app = FastAPI(title="Docling RAG API", version="1.1.0")
-logger = logging.getLogger("docling-rag")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1200"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
 
 _embedder: Any = None
+
+
+def _load_embedder() -> None:
+    global _embedder
+    if _embedder is None:
+        from sentence_transformers import SentenceTransformer
+
+        logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
+        _embedder = SentenceTransformer(EMBEDDING_MODEL)
+        logger.info("Embedding model loaded: %s", EMBEDDING_MODEL)
+
+
+logger = logging.getLogger("docling-rag")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_embedder()
+    yield
+
+
+app = FastAPI(title="Docling RAG API", version="1.2.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -45,13 +66,6 @@ async def request_logging(request: Request, call_next: Any) -> Any:
 
 
 def _vectors(texts: list[str]) -> list[list[float]]:
-    global _embedder
-    if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-
-        logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
-        _embedder = SentenceTransformer(EMBEDDING_MODEL)
-        logger.info("Embedding model loaded")
     return _embedder.encode(texts, normalize_embeddings=True).tolist()
 
 
