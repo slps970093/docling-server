@@ -63,9 +63,32 @@ else:
     _base_dir = Path(__file__).resolve().parent
 
 
+def _preload_docling_models() -> None:
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    logger.info("Pre-loading Docling models...")
+    pdf_pipeline_options = PdfPipelineOptions(
+        do_ocr=False,
+        do_table_structure=True,
+        do_code_enrichment=False,
+        do_formula_enrichment=False,
+    )
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pdf_pipeline_options,
+            ),
+        }
+    )
+    logger.info("Docling models loaded")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_embedder()
+    _preload_docling_models()
     db_path = _base_dir / "tasks.db"
     task_store.init(db_path)
     logger.info("Task store initialized: %s", db_path)
