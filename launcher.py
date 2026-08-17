@@ -38,7 +38,19 @@ os.environ.setdefault("DOCLING_SERVE_ARTIFACTS_PATH", str(_docling_artifacts))
 parser = argparse.ArgumentParser(description="Docling RAG Embedding API")
 parser.add_argument("--host", default=os.getenv("RAG_HOST", "0.0.0.0"), help="Bind address (default: 0.0.0.0)")
 parser.add_argument("--port", type=int, default=int(os.getenv("RAG_PORT", "8000")), help="Bind port (default: 8000)")
+parser.add_argument("--device", default=os.getenv("RAG_DEVICE", "auto"), help="Device: auto, cpu, cuda (default: auto)")
+parser.add_argument("--model", default=os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"), help="Embedding model name")
+parser.add_argument("--chunk-size", type=int, default=int(os.getenv("RAG_CHUNK_SIZE", "1200")), help="Chunk size in characters (default: 1200)")
+parser.add_argument("--chunk-overlap", type=int, default=int(os.getenv("RAG_CHUNK_OVERLAP", "150")), help="Chunk overlap in characters (default: 150)")
 args, _ = parser.parse_known_args()
+
+# Propagate CLI args to environment so rag_server.py can read them
+os.environ.setdefault("RAG_HOST", args.host)
+os.environ.setdefault("RAG_PORT", str(args.port))
+os.environ.setdefault("RAG_DEVICE", args.device)
+os.environ.setdefault("RAG_EMBEDDING_MODEL", args.model)
+os.environ.setdefault("RAG_CHUNK_SIZE", str(args.chunk_size))
+os.environ.setdefault("RAG_CHUNK_OVERLAP", str(args.chunk_overlap))
 
 import uvicorn
 
