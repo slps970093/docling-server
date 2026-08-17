@@ -30,6 +30,7 @@ CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
 RAG_DEVICE = os.getenv("RAG_DEVICE", "auto")
 
 _embedder: Any = None
+_converter: Any = None
 
 
 def _detect_device() -> str:
@@ -64,6 +65,7 @@ else:
 
 
 def _preload_docling_models() -> None:
+    global _converter
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -75,7 +77,7 @@ def _preload_docling_models() -> None:
         do_code_enrichment=False,
         do_formula_enrichment=False,
     )
-    converter = DocumentConverter(
+    _converter = DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=pdf_pipeline_options,
@@ -132,32 +134,8 @@ def _chunks(text: str) -> list[str]:
 
 
 def _convert(path: Path) -> str:
-    """Convert a document to markdown text using Docling with OCR disabled.
-
-    OCR is disabled to avoid the RapidOCR dependency on missing model data files
-    when running as a PyInstaller-bundled executable. For most use cases (native
-    PDF text, DOCX, PPTX, etc.) OCR is not needed.
-    """
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-
-    pdf_pipeline_options = PdfPipelineOptions(
-        do_ocr=False,
-        do_table_structure=True,
-        do_code_enrichment=False,
-        do_formula_enrichment=False,
-    )
-
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_options=pdf_pipeline_options,
-            ),
-        }
-    )
-
-    result = converter.convert(path)
+    """Convert a document to markdown text using the shared Docling converter."""
+    result = _converter.convert(path)
     return result.document.export_to_markdown()
 
 
