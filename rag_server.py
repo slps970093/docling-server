@@ -141,7 +141,9 @@ def _convert(path: Path) -> str:
 def _cleanup_temp_file(path: Path) -> None:
     for _ in range(10):
         try:
-            path.unlink(missing_ok=True)
+            if path.exists():
+                path.unlink()
+                logger.info("Temp file deleted: %s", path)
             return
         except PermissionError:
             time.sleep(0.5)
@@ -366,6 +368,7 @@ def _process_task(task_id: str, file_path: Path, filename: str) -> None:
 
 
 def _process_task_from_url(task_id: str, url: str, filename: str) -> None:
+    path: Path | None = None
     try:
         logger.info("[task %s] Downloading from URL: %s", task_id, url)
         resp = httpx.get(url, timeout=120, follow_redirects=True)
@@ -380,6 +383,9 @@ def _process_task_from_url(task_id: str, url: str, filename: str) -> None:
     except Exception as exc:
         task_store.fail_task(task_id, f"Download failed: {exc}")
         logger.exception("[task %s] URL download failed: %s", task_id, url)
+    finally:
+        if path and path.exists():
+            _cleanup_temp_file(path)
 
 
 # ---------------------------------------------------------------------------
