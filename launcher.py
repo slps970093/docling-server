@@ -1,5 +1,6 @@
 """PyInstaller entry point for the document embedding API."""
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -31,6 +32,14 @@ _docling_artifacts = Path(
 )
 os.environ.setdefault("DOCLING_SERVE_ARTIFACTS_PATH", str(_docling_artifacts))
 
+# ---------------------------------------------------------------------------
+# CLI arguments
+# ---------------------------------------------------------------------------
+parser = argparse.ArgumentParser(description="Docling RAG Embedding API")
+parser.add_argument("--host", default=os.getenv("RAG_HOST", "0.0.0.0"), help="Bind address (default: 0.0.0.0)")
+parser.add_argument("--port", type=int, default=int(os.getenv("RAG_PORT", "8000")), help="Bind port (default: 8000)")
+args, _ = parser.parse_known_args()
+
 import uvicorn
 
 
@@ -38,6 +47,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "rag_server:app",
         factory=False,
-        host=os.getenv("RAG_HOST", "0.0.0.0"),
-        port=int(os.getenv("RAG_PORT", "8000")),
+        host=args.host,
+        port=args.port,
     )
