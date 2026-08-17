@@ -18,18 +18,31 @@ from pydantic import BaseModel
 EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1200"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "150"))
+RAG_DEVICE = os.getenv("RAG_DEVICE", "auto")
 
 _embedder: Any = None
+
+
+def _detect_device() -> str:
+    import torch
+    if RAG_DEVICE != "auto":
+        return RAG_DEVICE
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 
 def _load_embedder() -> None:
     global _embedder
     if _embedder is None:
+        import torch
         from sentence_transformers import SentenceTransformer
 
-        logger.info("Loading embedding model: %s", EMBEDDING_MODEL)
-        _embedder = SentenceTransformer(EMBEDDING_MODEL)
-        logger.info("Embedding model loaded: %s", EMBEDDING_MODEL)
+        device = _detect_device()
+        logger.info("Torch version: %s, CUDA available: %s", torch.__version__, torch.cuda.is_available())
+        logger.info("Loading embedding model: %s (device=%s)", EMBEDDING_MODEL, device)
+        _embedder = SentenceTransformer(EMBEDDING_MODEL, device=device)
+        logger.info("Embedding model loaded: %s on %s", EMBEDDING_MODEL, device)
 
 
 logger = logging.getLogger("docling-rag")
