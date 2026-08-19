@@ -84,7 +84,37 @@ def _preload_docling_models() -> None:
             ),
         }
     )
-    logger.info("Docling models loaded")
+
+    # Warm-up: 用空白 PDF 強制 pipeline 真正初始化
+    import tempfile
+
+    # 最小合法 PDF（單頁空白）
+    _MINIMAL_PDF = (
+        b"%PDF-1.0\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/MediaBox[0 0 72 72]/Parent 2 0 R>>endobj\n"
+        b"xref\n0 4\n"
+        b"0000000000 65535 f \n"
+        b"0000000009 00000 n \n"
+        b"0000000058 00000 n \n"
+        b"0000000115 00000 n \n"
+        b"trailer<</Size 4/Root 1 0 R>>\n"
+        b"startxref\n183\n%%EOF\n"
+    )
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(_MINIMAL_PDF)
+        tmp_path = Path(tmp.name)
+
+    try:
+        _converter.convert(tmp_path)
+    except Exception:
+        pass  # 空白 PDF 可能無文字可擷取，忽略即可
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    logger.info("Docling models loaded (pipeline warm-up complete)")
 
 
 @asynccontextmanager
@@ -133,8 +163,18 @@ def _chunks(text: str) -> list[str]:
     return [text[start : start + CHUNK_SIZE] for start in range(0, len(text), step)]
 
 
+_TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".json", ".jsonl", ".xml", ".html", ".htm", ".log", ".ini", ".cfg", ".yml", ".yaml", ".toml"}
+
+
 def _convert(path: Path) -> str:
-    """Convert a document to markdown text using the shared Docling converter."""
+    """Convert a document to markdown text using the shared Docling converter.
+
+    Plain text files are read directly without Docling to avoid unnecessary
+    model loading and pipeline initialization.
+    """
+    if path.suffix.lower() in _TEXT_EXTENSIONS:
+        logger.info("Reading plain text file directly: %s", path.name)
+        return path.read_text(encoding="utf-8", errors="ignore")
     result = _converter.convert(path)
     return result.document.export_to_markdown()
 
@@ -175,6 +215,21 @@ class ImportRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Models for the /rag/embed/text endpoint
+# ---------------------------------------------------------------------------
+
+
+class TextEmbedRequest(BaseModel):
+    """Request body for /rag/embed/text.
+
+    Send one or more text strings, get embeddings back directly.
+    No file parsing, no Docling, just chunk + embed.
+    """
+
+    texts: list[str]
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -182,6 +237,41 @@ class ImportRequest(BaseModel):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "embedding"}
+
+
+@app.post("/rag/embed/text")
+async def embed_text(body: TextEmbedRequest) -> dict[str, Any]:
+    """Send plain text(s), get embeddings back directly.
+
+    No file parsing, no Docling. Just chunk each text and embed.
+
+    Request:
+        {"texts": ["第一段文字", "第二段文字"]}
+
+    Response:
+        {"model": "...", "dimensions": 512, "items": [{"id": "uuid", "text": "...", "embedding": [...]}]}
+    """
+    if not body.texts:
+        raise HTTPException(status_code=422, detail="No texts provided")
+
+    all_items: list[dict[str, Any]] = []
+    for text in body.texts:
+        chunks = _chunks(text)
+        if not chunks:
+            continue
+        vectors = _vectors(chunks)
+        for chunk, vector in zip(chunks, vectors):
+            all_items.append({"id": str(uuid4()), "text": chunk, "embedding": vector})
+
+    if not all_items:
+        raise HTTPException(status_code=422, detail="All texts are empty")
+
+    logger.info("Embedded %d texts -> %d chunks", len(body.texts), len(all_items))
+    return {
+        "model": EMBEDDING_MODEL,
+        "dimensions": len(all_items[0]["embedding"]),
+        "items": all_items,
+    }
 
 
 @app.post("/rag/embed")
