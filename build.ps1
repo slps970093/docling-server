@@ -21,7 +21,12 @@ if ($Clean) {
 
 & $python.Source -3.12 -m venv .venv-build
 & .venv-build\Scripts\python.exe -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
+
 & .venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+if ($LASTEXITCODE -ne 0) { throw "pip install requirements failed" }
+
 & .venv-build\Scripts\python.exe -m PyInstaller --clean --noconfirm docling-serve.spec
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
 Write-Host "Built dist\docling-serve.exe"

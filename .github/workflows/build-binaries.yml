@@ -15,10 +15,6 @@ jobs:
             artifact: docling-serve-windows-x64
             binary: dist/docling-serve.exe
             release_name: docling-serve-windows-x64.exe
-          - os: windows-11-arm
-            artifact: docling-serve-windows-arm64
-            binary: dist/docling-serve.exe
-            release_name: docling-serve-windows-arm64.exe
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64
             binary: dist/docling-serve
