@@ -14,9 +14,19 @@ jobs:
           - os: windows-latest
             artifact: docling-serve-windows-x64
             binary: dist/docling-serve.exe
+            release_name: docling-serve-windows-x64.exe
+          - os: windows-11-arm
+            artifact: docling-serve-windows-arm64
+            binary: dist/docling-serve.exe
+            release_name: docling-serve-windows-arm64.exe
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64
             binary: dist/docling-serve
+            release_name: docling-serve-linux-x64
+          - os: ubuntu-24.04-arm
+            artifact: docling-serve-linux-arm64
+            binary: dist/docling-serve
+            release_name: docling-serve-linux-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +48,20 @@ jobs:
           else
             ./dist/docling-serve --help
           fi
+      - name: Rename binary for release
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp dist/docling-serve.exe dist/${{ matrix.release_name }}
+          else
+            cp dist/docling-serve dist/${{ matrix.release_name }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.binary }}
+          path: dist/${{ matrix.release_name }}
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/${{ matrix.release_name }}
