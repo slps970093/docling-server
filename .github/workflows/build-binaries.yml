@@ -18,15 +18,24 @@ jobs:
             artifact: docling-serve-windows-x64
             binary: dist/docling-serve.exe
             release_name: docling-serve-windows-x64.exe
+            cuda: false
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64
             binary: dist/docling-serve
             release_name: docling-serve-linux-x64
+            cuda: false
           - os: ubuntu-24.04-arm
             artifact: docling-serve-linux-arm64
             binary: dist/docling-serve
             release_name: docling-serve-linux-arm64
+            cuda: false
+          - os: ubuntu-latest
+            artifact: docling-serve-linux-x64-cuda
+            binary: dist/docling-serve.tar.gz
+            release_name: docling-serve-linux-x64-cuda.tar.gz
+            cuda: true
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,10 +45,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\build.ps1 -Clean
-      - name: Build on Linux
-        if: runner.os == 'Linux'
+      - name: Build on Linux (CPU)
+        if: runner.os == 'Linux' && !matrix.cuda
         run: bash ./build.sh --clean
-      - name: Smoke test
+      - name: Build on Linux (CUDA)
+        if: runner.os == 'Linux' && matrix.cuda
+        env:
+          DOCLING_BUILD_CUDA: "1"
+        run: |
+          bash ./build.sh --clean
+          tar -czf dist/docling-serve.tar.gz -C dist docling-serve
+      - name: Smoke test (CPU)
+        if: "!matrix.cuda"
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -52,6 +69,8 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cp dist/docling-serve.exe dist/${{ matrix.release_name }}
+          elif [[ "${{ matrix.cuda }}" == "true" ]]; then
+            cp dist/docling-serve.tar.gz dist/${{ matrix.release_name }}
           else
             cp dist/docling-serve dist/${{ matrix.release_name }}
           fi

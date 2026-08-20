@@ -3,10 +3,16 @@
 
 The package uses dynamic imports and ships native libraries through PyTorch,
 so collect the package data and submodules explicitly.
+
+Build modes (controlled by environment variable DOCLING_BUILD_CUDA):
+  DOCLING_BUILD_CUDA=0 (default) — CPU-only, single-file binary, small size
+  DOCLING_BUILD_CUDA=1           — CUDA included, onedir bundle, large but functional
 """
 
+import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
+BUILD_CUDA = os.environ.get("DOCLING_BUILD_CUDA", "0") == "1"
 
 datas = []
 binaries = []
@@ -73,43 +79,67 @@ analysis = Analysis(
     optimize=0,
 )
 
-# Strip CUDA libraries — CI runners and most deployments are CPU-only.
-# These .so files can easily add 3-5 GB to the binary for zero benefit.
-CUDA_PATTERNS = (
-    "libcuda",
-    "libcudart",
-    "libcublas",
-    "libcurand",
-    "libcufft",
-    "libcusolver",
-    "libcusparse",
-    "libcudnn",
-    "libnccl",
-    "libnvrtc",
-    "libnvToolsExt",
-    "libcaffe2_nvrtc",
-    "libtorch_cuda",
-    "libc10_cuda",
-)
-
-analysis.binaries = [
-    (name, path, typecode)
-    for name, path, typecode in analysis.binaries
-    if not any(pat in name for pat in CUDA_PATTERNS)
-]
+# CPU build: strip CUDA libraries to keep binary small and build fast
+if not BUILD_CUDA:
+    CUDA_PATTERNS = (
+        "libcuda",
+        "libcudart",
+        "libcublas",
+        "libcurand",
+        "libcufft",
+        "libcusolver",
+        "libcusparse",
+        "libcudnn",
+        "libnccl",
+        "libnvrtc",
+        "libnvToolsExt",
+        "libcaffe2_nvrtc",
+        "libtorch_cuda",
+        "libc10_cuda",
+    )
+    analysis.binaries = [
+        (name, path, typecode)
+        for name, path, typecode in analysis.binaries
+        if not any(pat in name for pat in CUDA_PATTERNS)
+    ]
 
 pyz = PYZ(analysis.pure)
 
-executable = EXE(
-    pyz,
-    analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
-    [],
-    name="docling-serve",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=True,
-)
+if BUILD_CUDA:
+    # CUDA build: onedir mode — no compression, just a folder with all files
+    # Avoids OOM/timeout during the PKG compression step
+    executable = EXE(
+        pyz,
+        analysis.scripts,
+        [],
+        exclude_binaries=True,
+        name="docling-serve",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+    )
+    coll = COLLECT(
+        executable,
+        analysis.binaries,
+        analysis.datas,
+        strip=False,
+        upx=False,
+        name="docling-serve",
+    )
+else:
+    # CPU build: single-file binary
+    executable = EXE(
+        pyz,
+        analysis.scripts,
+        analysis.binaries,
+        analysis.datas,
+        [],
+        name="docling-serve",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+    )
