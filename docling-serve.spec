@@ -1,18 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build definition for Docling Serve.
 
-The package uses dynamic imports and ships native libraries through PyTorch,
-so collect the package data and submodules explicitly.
+Always builds in onedir mode to avoid OOM during PKG compression.
+CUDA libraries are included unless DOCLING_BUILD_CUDA=0.
 
-Build modes (controlled by environment variable DOCLING_BUILD_CUDA):
-  DOCLING_BUILD_CUDA=0 (default) — CPU-only, single-file binary, small size
-  DOCLING_BUILD_CUDA=1           — CUDA included, onedir bundle, large but functional
+The CI script is responsible for packing the output folder into a tar.gz.
 """
 
 import os
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-BUILD_CUDA = os.environ.get("DOCLING_BUILD_CUDA", "0") == "1"
+BUILD_CUDA = os.environ.get("DOCLING_BUILD_CUDA", "1") == "1"
 
 datas = []
 binaries = []
@@ -79,7 +77,7 @@ analysis = Analysis(
     optimize=0,
 )
 
-# CPU build: strip CUDA libraries to keep binary small and build fast
+# CPU build: strip CUDA libraries
 if not BUILD_CUDA:
     CUDA_PATTERNS = (
         "libcuda",
@@ -105,41 +103,25 @@ if not BUILD_CUDA:
 
 pyz = PYZ(analysis.pure)
 
-if BUILD_CUDA:
-    # CUDA build: onedir mode — no compression, just a folder with all files
-    # Avoids OOM/timeout during the PKG compression step
-    executable = EXE(
-        pyz,
-        analysis.scripts,
-        [],
-        exclude_binaries=True,
-        name="docling-serve",
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=False,
-        console=True,
-    )
-    coll = COLLECT(
-        executable,
-        analysis.binaries,
-        analysis.datas,
-        strip=False,
-        upx=False,
-        name="docling-serve",
-    )
-else:
-    # CPU build: single-file binary
-    executable = EXE(
-        pyz,
-        analysis.scripts,
-        analysis.binaries,
-        analysis.datas,
-        [],
-        name="docling-serve",
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=False,
-        console=True,
-    )
+# Always onedir — no PKG compression, no OOM
+exe = EXE(
+    pyz,
+    analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="docling-serve",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,
+)
+
+coll = COLLECT(
+    exe,
+    analysis.binaries,
+    analysis.datas,
+    strip=False,
+    upx=False,
+    name="docling-serve",
+)

@@ -16,68 +16,66 @@ jobs:
         include:
           - os: windows-latest
             artifact: docling-serve-windows-x64
-            binary: dist/docling-serve.exe
-            release_name: docling-serve-windows-x64.exe
+            release_name: docling-serve-windows-x64.zip
             cuda: false
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64
-            binary: dist/docling-serve
-            release_name: docling-serve-linux-x64
+            release_name: docling-serve-linux-x64.tar.gz
             cuda: false
           - os: ubuntu-24.04-arm
             artifact: docling-serve-linux-arm64
-            binary: dist/docling-serve
-            release_name: docling-serve-linux-arm64
+            release_name: docling-serve-linux-arm64.tar.gz
             cuda: false
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64-cuda
-            binary: dist/docling-serve.tar.gz
             release_name: docling-serve-linux-x64-cuda.tar.gz
             cuda: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: .\build.ps1 -Clean
+
       - name: Build on Linux (CPU)
         if: runner.os == 'Linux' && !matrix.cuda
+        env:
+          DOCLING_BUILD_CUDA: "0"
         run: bash ./build.sh --clean
+
       - name: Build on Linux (CUDA)
         if: runner.os == 'Linux' && matrix.cuda
         env:
           DOCLING_BUILD_CUDA: "1"
+        run: bash ./build.sh --clean
+
+      - name: Smoke test
+        if: runner.os == 'Linux'
+        run: ./dist/docling-serve/docling-serve --help
+
+      - name: Pack Linux release (tar.gz)
+        if: runner.os == 'Linux'
         run: |
-          bash ./build.sh --clean
-          tar -czf dist/docling-serve.tar.gz -C dist docling-serve
-      - name: Smoke test (CPU)
-        if: "!matrix.cuda"
-        shell: bash
+          tar -czf dist/${{ matrix.release_name }} -C dist docling-serve
+
+      - name: Pack Windows release (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            ./dist/docling-serve.exe --help
-          else
-            ./dist/docling-serve --help
-          fi
-      - name: Rename binary for release
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cp dist/docling-serve.exe dist/${{ matrix.release_name }}
-          elif [[ "${{ matrix.cuda }}" == "true" ]]; then
-            cp dist/docling-serve.tar.gz dist/${{ matrix.release_name }}
-          else
-            cp dist/docling-serve dist/${{ matrix.release_name }}
-          fi
+          Compress-Archive -Path dist\docling-serve -DestinationPath dist\${{ matrix.release_name }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.release_name }}
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
