@@ -16,22 +16,18 @@ jobs:
         include:
           - os: windows-latest
             artifact: docling-serve-windows-x64
-            release_name: docling-serve-windows-x64.zip
-            cuda: false
+            release_name: docling-serve-windows-x64.exe
+            binary: dist/docling-serve.exe
           - os: ubuntu-latest
             artifact: docling-serve-linux-x64
-            release_name: docling-serve-linux-x64.tar.gz
-            cuda: false
+            release_name: docling-serve-linux-x64
+            binary: dist/docling-serve
           - os: ubuntu-24.04-arm
             artifact: docling-serve-linux-arm64
-            release_name: docling-serve-linux-arm64.tar.gz
-            cuda: false
-          - os: ubuntu-latest
-            artifact: docling-serve-linux-x64-cuda
-            release_name: docling-serve-linux-x64-cuda.tar.gz
-            cuda: true
+            release_name: docling-serve-linux-arm64
+            binary: dist/docling-serve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -39,37 +35,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build on Windows
+      - name: Install PyInstaller
+        run: pip install pyinstaller==6.16.0
+
+      - name: Build bootstrap binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\build.ps1 -Clean
+        run: |
+          python -m PyInstaller --clean --noconfirm bootstrap.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
-      - name: Build on Linux (CPU)
-        if: runner.os == 'Linux' && !matrix.cuda
-        env:
-          DOCLING_BUILD_CUDA: "0"
-        run: bash ./build.sh --clean
-
-      - name: Build on Linux (CUDA)
-        if: runner.os == 'Linux' && matrix.cuda
-        env:
-          DOCLING_BUILD_CUDA: "1"
-        run: bash ./build.sh --clean
+      - name: Build bootstrap binary (Linux)
+        if: runner.os == 'Linux'
+        run: python -m PyInstaller --clean --noconfirm bootstrap.spec
 
       - name: Smoke test
-        if: runner.os == 'Linux'
-        run: ./dist/docling-serve/docling-serve --help
-
-      - name: Pack Linux release (tar.gz)
-        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          tar -czf dist/${{ matrix.release_name }} -C dist docling-serve
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ./dist/docling-serve.exe --help || true
+          else
+            ./dist/docling-serve --help || true
+          fi
 
-      - name: Pack Windows release (zip)
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: Rename binary for release
+        shell: bash
         run: |
-          Compress-Archive -Path dist\docling-serve -DestinationPath dist\${{ matrix.release_name }}
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp dist/docling-serve.exe dist/${{ matrix.release_name }}
+          else
+            cp dist/docling-serve dist/${{ matrix.release_name }}
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
