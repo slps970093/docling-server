@@ -49,15 +49,6 @@ jobs:
         if: runner.os == 'Linux'
         run: python -m PyInstaller --clean --noconfirm bootstrap.spec
 
-      - name: Smoke test
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            ./dist/docling-serve.exe --help || true
-          else
-            ./dist/docling-serve --help || true
-          fi
-
       - name: Rename binary for release
         shell: bash
         run: |
