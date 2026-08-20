@@ -52,11 +52,10 @@ TORCH_CUDA_PACKAGES = [
 def get_install_dir() -> Path:
     if "DOCLING_INSTALL_DIR" in os.environ:
         return Path(os.environ["DOCLING_INSTALL_DIR"])
-    if platform.system() == "Windows":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "docling-serve"
+    # Default: same directory as the executable
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def get_python() -> str:
